@@ -1,7 +1,13 @@
-import { App, Editor, FileManager, FileSystemAdapter, FrontMatterCache, MarkdownView, Modal, normalizePath, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder } from 'obsidian';
-import { Project, TodoistApi } from "@doist/todoist-api-typescript"// Remember to rename these classes and interfaces!
+import { App, Editor, FileManager, FileSystemAdapter, FrontMatterCache, MarkdownView, Modal, normalizePath, Notice, Plugin, PluginSettingTab, requestUrl, Setting, TFile, TFolder } from 'obsidian';
 import { Console, error } from 'console';
 import * as os from 'os';
+
+interface Project {
+	id: string;
+	name: string;
+	parentId: string | null;
+}
+
 interface TodoistProjectSyncSettings {
 	PrimarySyncDevice: string;
 	TodoistSyncFrequency: number;
@@ -19,7 +25,6 @@ const DEFAULT_SETTINGS: TodoistProjectSyncSettings = {
 export default class TodoistProjectSync extends Plugin {
 	settings: TodoistProjectSyncSettings;
 	refreshIntervalID: number;
-	todoistApi: TodoistApi;
 
 	async onload() {
 		await this.loadSettings();
@@ -55,11 +60,25 @@ export default class TodoistProjectSync extends Plugin {
 			return;
 		}
 		//app:reload
-		this.todoistApi = new TodoistApi(this.settings.TodoistToken);
 		if (!await this.app.vault.adapter.exists(this.settings.TodoistProjectFolder))
 			this.app.vault.createFolder(this.settings.TodoistProjectFolder);
 		try {
-			const projects = await this.todoistApi.getProjects();
+			const projects: Project[] = [];
+			let cursor: string | null = null;
+			do {
+				const url: string = 'https://api.todoist.com/api/v1/projects' + (cursor ? '?cursor=' + encodeURIComponent(cursor) : '');
+				const response = await requestUrl({
+					url,
+					headers: { 'Authorization': 'Bearer ' + this.settings.TodoistToken }
+				});
+				const page: { results: Array<{ id: string, name: string, parent_id: string | null }>, next_cursor: string | null } = response.json;
+				projects.push(...page.results.map((p: { id: string, name: string, parent_id: string | null }) => ({
+					id: p.id,
+					name: p.name,
+					parentId: p.parent_id ?? null
+				})));
+				cursor = page.next_cursor ?? null;
+			} while (cursor);
 
 			const files = this.app.vault.getMarkdownFiles();
 			const filesById: { [id: string]: TFile; } = {};
